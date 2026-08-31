@@ -5,11 +5,11 @@ import httpx
 from fastapi import Depends,FastAPI,Header,HTTPException,Query
 from sqlalchemy import and_,text
 from sqlalchemy.orm import Session
-from database import Base,engine,get_db
+from database import Base,engine,get_db,SessionLocal
 from models import BackupRecord,Snapshot,SyncLog
 from schemas import BulkSyncPayload,RestoreRequest,SyncEvent
 from snapshot_scheduler import start_snapshot_scheduler
-app=FastAPI(title="UGA Backup Service",version="1.3")
+app=FastAPI(title="UGA Backup Service",version="1.4")
 SYNC_TOKEN=os.environ.get("BACKUP_SYNC_TOKEN","").strip();RESTORE_TOKEN=os.environ.get("BACKUP_RESTORE_TOKEN","").strip();RESTORE_TARGET_URLS={"UGAMAP":os.environ.get("UGAMAP_RESTORE_URL"),"UGASHIP":os.environ.get("UGASHIP_RESTORE_URL")};DB_READY=False;DB_ERROR=None
 def _now_iso():return datetime.now(timezone.utc).isoformat()
 def _checksum(data):return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
@@ -41,19 +41,22 @@ def _target(source,override):
  if p.scheme!="https" or not p.netloc:raise HTTPException(400,"Restore target must use HTTPS")
  return target
 @app.get("/health")
-def health(db:Session=Depends(get_db)):
+def health():
  _initialize_database();r={"status":"ok" if DB_READY else "degraded","service":"UGA Backup Service","database":"connected" if DB_READY else "unreachable","time":_now_iso()}
- if DB_READY:
-  try:r["records"]={"UGAMAP":db.query(BackupRecord).filter(BackupRecord.source=="UGAMAP",BackupRecord.is_deleted==0).count(),"UGASHIP":db.query(BackupRecord).filter(BackupRecord.source=="UGASHIP",BackupRecord.is_deleted==0).count(),"deleted":db.query(BackupRecord).filter(BackupRecord.is_deleted!=0).count(),"snapshots":db.query(Snapshot).count()};last=db.query(SyncLog).order_by(SyncLog.created_at.desc()).first();r["last_activity"]=last.created_at.isoformat() if last and last.created_at else None
-  except Exception as e:r["stats_error"]=f"{type(e).__name__}: {e}"[:300]
- elif DB_ERROR:r["database_error"]=DB_ERROR[:500]
+ if not DB_READY:
+  if DB_ERROR:r["database_error"]=DB_ERROR[:500]
+  return r
+ db=SessionLocal()
+ try:
+  r["records"]={"UGAMAP":db.query(BackupRecord).filter(BackupRecord.source=="UGAMAP",BackupRecord.is_deleted==0).count(),"UGASHIP":db.query(BackupRecord).filter(BackupRecord.source=="UGASHIP",BackupRecord.is_deleted==0).count(),"deleted":db.query(BackupRecord).filter(BackupRecord.is_deleted!=0).count(),"snapshots":db.query(Snapshot).count()};last=db.query(SyncLog).order_by(SyncLog.created_at.desc()).first();r["last_activity"]=last.created_at.isoformat() if last and last.created_at else None
+ except Exception as e:r["stats_error"]=f"{type(e).__name__}: {e}"[:300]
+ finally:db.close()
  return r
 @app.get("/audit",dependencies=[Depends(verify_restore_token)])
 def audit(source:str|None=Query(None,pattern="^(UGAMAP|UGASHIP)$"),limit:int=Query(100,ge=1,le=500),db:Session=Depends(get_db)):
  q=db.query(SyncLog)
  if source:q=q.filter(SyncLog.source==source)
- rows=q.order_by(SyncLog.created_at.desc(),SyncLog.id.desc()).limit(limit).all()
- return {"source":source,"count":len(rows),"events":[{"id":x.id,"action":x.action,"source":x.source,"detail":x.detail,"created_at":x.created_at} for x in rows]}
+ rows=q.order_by(SyncLog.created_at.desc(),SyncLog.id.desc()).limit(limit).all();return {"source":source,"count":len(rows),"events":[{"id":x.id,"action":x.action,"source":x.source,"detail":x.detail,"created_at":x.created_at} for x in rows]}
 @app.post("/sync",dependencies=[Depends(verify_sync_token)])
 def sync_event(e:SyncEvent,db:Session=Depends(get_db)):
  x=db.query(BackupRecord).filter(and_(BackupRecord.source==e.source,BackupRecord.entity_type==e.entity_type,BackupRecord.entity_id==e.entity_id)).first()
