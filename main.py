@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from database import Base, engine, get_db
 from models import BackupRecord, Snapshot, SyncLog
 from schemas import BulkSyncPayload, RestoreRequest, SyncEvent
+from snapshot_scheduler import start_snapshot_scheduler
 
 app=FastAPI(title="UGA Backup Service",version="1.1")
 SYNC_TOKEN=os.environ.get("BACKUP_SYNC_TOKEN","").strip()
@@ -27,7 +28,9 @@ def _initialize_database():
   DB_READY=True;DB_ERROR=None
  except Exception as exc:DB_READY=False;DB_ERROR=f"{type(exc).__name__}: {exc}"
 @app.on_event("startup")
-def startup_database_check():_initialize_database()
+def startup_database_check():
+ _initialize_database()
+ if DB_READY:start_snapshot_scheduler()
 def _require_configured_token(value,name):
  if not value:raise HTTPException(status_code=503,detail=f"{name} is not configured")
 def verify_sync_token(x_backup_token:str=Header(...)):
