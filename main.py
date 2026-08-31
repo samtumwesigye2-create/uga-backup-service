@@ -6,14 +6,12 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from sqlalchemy import and_
+from sqlalchemy import and_, text
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from models import BackupRecord, Snapshot, SyncLog
 from schemas import BulkSyncPayload, RestoreRequest, SyncEvent
-
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="UGA Backup Service", version="1.0")
 
@@ -24,9 +22,32 @@ RESTORE_TARGET_URLS = {
     "UGASHIP": os.environ.get("UGASHIP_RESTORE_URL"),
 }
 
+DB_READY = False
+DB_ERROR = None
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _initialize_database() -> None:
+    global DB_READY, DB_ERROR
+    try:
+        Base.metadata.create_all(bind=engine)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        DB_READY = True
+        DB_ERROR = None
+    except Exception as exc:
+        DB_READY = False
+        DB_ERROR = f"{type(exc).__name__}: {exc}"
+
+
+@app.on_event("startup")
+def startup_database_check():
+    # Do not crash the whole API if PostgreSQL is temporarily unreachable.
+    # Railway can still keep the service alive so /health can report the DB state.
+    _initialize_database()
 
 
 def _require_configured_token(value: str, name: str):
@@ -62,7 +83,18 @@ def _normalize_target(source: str, override: str | None) -> str | None:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "UGA Backup Service", "time": _now_iso()}
+    # Re-check on every health request so the service recovers automatically
+    # once PostgreSQL becomes reachable, without requiring another code change.
+    _initialize_database()
+    response = {
+        "status": "ok" if DB_READY else "degraded",
+        "service": "UGA Backup Service",
+        "database": "connected" if DB_READY else "unreachable",
+        "time": _now_iso(),
+    }
+    if not DB_READY and DB_ERROR:
+        response["database_error"] = DB_ERROR[:500]
+    return response
 
 
 @app.post("/sync", dependencies=[Depends(verify_sync_token)])
