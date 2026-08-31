@@ -1,7 +1,5 @@
-import hashlib
-import json
-import os
-from datetime import datetime, timezone
+import hashlib,json,os
+from datetime import datetime,timezone
 from urllib.parse import urlparse
 import httpx
 from fastapi import Depends,FastAPI,Header,HTTPException,Query
@@ -11,9 +9,8 @@ from database import Base,engine,get_db
 from models import BackupRecord,Snapshot,SyncLog
 from schemas import BulkSyncPayload,RestoreRequest,SyncEvent
 from snapshot_scheduler import start_snapshot_scheduler
-app=FastAPI(title="UGA Backup Service",version="1.2")
-SYNC_TOKEN=os.environ.get("BACKUP_SYNC_TOKEN","").strip();RESTORE_TOKEN=os.environ.get("BACKUP_RESTORE_TOKEN","").strip()
-RESTORE_TARGET_URLS={"UGAMAP":os.environ.get("UGAMAP_RESTORE_URL"),"UGASHIP":os.environ.get("UGASHIP_RESTORE_URL")};DB_READY=False;DB_ERROR=None
+app=FastAPI(title="UGA Backup Service",version="1.3")
+SYNC_TOKEN=os.environ.get("BACKUP_SYNC_TOKEN","").strip();RESTORE_TOKEN=os.environ.get("BACKUP_RESTORE_TOKEN","").strip();RESTORE_TARGET_URLS={"UGAMAP":os.environ.get("UGAMAP_RESTORE_URL"),"UGASHIP":os.environ.get("UGASHIP_RESTORE_URL")};DB_READY=False;DB_ERROR=None
 def _now_iso():return datetime.now(timezone.utc).isoformat()
 def _checksum(data):return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
 def _initialize_database():
@@ -47,11 +44,16 @@ def _target(source,override):
 def health(db:Session=Depends(get_db)):
  _initialize_database();r={"status":"ok" if DB_READY else "degraded","service":"UGA Backup Service","database":"connected" if DB_READY else "unreachable","time":_now_iso()}
  if DB_READY:
-  try:
-   r["records"]={"UGAMAP":db.query(BackupRecord).filter(BackupRecord.source=="UGAMAP",BackupRecord.is_deleted==0).count(),"UGASHIP":db.query(BackupRecord).filter(BackupRecord.source=="UGASHIP",BackupRecord.is_deleted==0).count(),"deleted":db.query(BackupRecord).filter(BackupRecord.is_deleted!=0).count(),"snapshots":db.query(Snapshot).count()};last=db.query(SyncLog).order_by(SyncLog.created_at.desc()).first();r["last_activity"]=last.created_at.isoformat() if last and last.created_at else None
+  try:r["records"]={"UGAMAP":db.query(BackupRecord).filter(BackupRecord.source=="UGAMAP",BackupRecord.is_deleted==0).count(),"UGASHIP":db.query(BackupRecord).filter(BackupRecord.source=="UGASHIP",BackupRecord.is_deleted==0).count(),"deleted":db.query(BackupRecord).filter(BackupRecord.is_deleted!=0).count(),"snapshots":db.query(Snapshot).count()};last=db.query(SyncLog).order_by(SyncLog.created_at.desc()).first();r["last_activity"]=last.created_at.isoformat() if last and last.created_at else None
   except Exception as e:r["stats_error"]=f"{type(e).__name__}: {e}"[:300]
  elif DB_ERROR:r["database_error"]=DB_ERROR[:500]
  return r
+@app.get("/audit",dependencies=[Depends(verify_restore_token)])
+def audit(source:str|None=Query(None,pattern="^(UGAMAP|UGASHIP)$"),limit:int=Query(100,ge=1,le=500),db:Session=Depends(get_db)):
+ q=db.query(SyncLog)
+ if source:q=q.filter(SyncLog.source==source)
+ rows=q.order_by(SyncLog.created_at.desc(),SyncLog.id.desc()).limit(limit).all()
+ return {"source":source,"count":len(rows),"events":[{"id":x.id,"action":x.action,"source":x.source,"detail":x.detail,"created_at":x.created_at} for x in rows]}
 @app.post("/sync",dependencies=[Depends(verify_sync_token)])
 def sync_event(e:SyncEvent,db:Session=Depends(get_db)):
  x=db.query(BackupRecord).filter(and_(BackupRecord.source==e.source,BackupRecord.entity_type==e.entity_type,BackupRecord.entity_id==e.entity_id)).first()
@@ -104,8 +106,7 @@ async def restore(req:RestoreRequest,db:Session=Depends(get_db)):
   s=db.get(Snapshot,req.snapshot_id)
   if not s:raise HTTPException(404,"Snapshot not found")
   actual=_checksum(s.data)
-  if actual!=s.checksum:
-   db.add(SyncLog(action="restore_blocked_integrity",source=req.source,detail=f"snapshot={s.id} expected={s.checksum} actual={actual}"));db.commit();raise HTTPException(409,"Snapshot integrity verification failed; restore blocked")
+  if actual!=s.checksum:db.add(SyncLog(action="restore_blocked_integrity",source=req.source,detail=f"snapshot={s.id} expected={s.checksum} actual={actual}"));db.commit();raise HTTPException(409,"Snapshot integrity verification failed; restore blocked")
   selected=[i for i in s.data if i.get("source")==req.source and (not req.entity_type or i.get("entity_type")==req.entity_type)];out=[i.get("data",{}) for i in selected if not i.get("is_deleted")];desc=f"snapshot:{req.snapshot_id}"
  else:
   q=db.query(BackupRecord).filter(BackupRecord.source==req.source,BackupRecord.is_deleted==0)
