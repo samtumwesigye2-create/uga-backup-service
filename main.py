@@ -9,7 +9,7 @@ from database import Base,engine,get_db,SessionLocal
 from models import BackupRecord,Snapshot,SyncLog
 from schemas import BulkSyncPayload,RestoreRequest,SyncEvent
 from snapshot_scheduler import start_snapshot_scheduler
-app=FastAPI(title="UGA Backup Service",version="1.4")
+app=FastAPI(title="UGA Backup Service",version="1.5")
 SYNC_TOKEN=os.environ.get("BACKUP_SYNC_TOKEN","").strip();RESTORE_TOKEN=os.environ.get("BACKUP_RESTORE_TOKEN","").strip();RESTORE_TARGET_URLS={"UGAMAP":os.environ.get("UGAMAP_RESTORE_URL"),"UGASHIP":os.environ.get("UGASHIP_RESTORE_URL")};DB_READY=False;DB_ERROR=None
 def _now_iso():return datetime.now(timezone.utc).isoformat()
 def _checksum(data):return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
@@ -22,8 +22,7 @@ def _initialize_database():
  except Exception as e:DB_READY=False;DB_ERROR=f"{type(e).__name__}: {e}"
 @app.on_event("startup")
 def startup_database_check():
- _initialize_database()
- if DB_READY:start_snapshot_scheduler()
+ _initialize_database();start_snapshot_scheduler()
 def _require(v,n):
  if not v:raise HTTPException(503,f"{n} is not configured")
 def verify_sync_token(x_backup_token:str=Header(...)):
@@ -47,8 +46,7 @@ def health():
   if DB_ERROR:r["database_error"]=DB_ERROR[:500]
   return r
  db=SessionLocal()
- try:
-  r["records"]={"UGAMAP":db.query(BackupRecord).filter(BackupRecord.source=="UGAMAP",BackupRecord.is_deleted==0).count(),"UGASHIP":db.query(BackupRecord).filter(BackupRecord.source=="UGASHIP",BackupRecord.is_deleted==0).count(),"deleted":db.query(BackupRecord).filter(BackupRecord.is_deleted!=0).count(),"snapshots":db.query(Snapshot).count()};last=db.query(SyncLog).order_by(SyncLog.created_at.desc()).first();r["last_activity"]=last.created_at.isoformat() if last and last.created_at else None
+ try:r["records"]={"UGAMAP":db.query(BackupRecord).filter(BackupRecord.source=="UGAMAP",BackupRecord.is_deleted==0).count(),"UGASHIP":db.query(BackupRecord).filter(BackupRecord.source=="UGASHIP",BackupRecord.is_deleted==0).count(),"deleted":db.query(BackupRecord).filter(BackupRecord.is_deleted!=0).count(),"snapshots":db.query(Snapshot).count()};last=db.query(SyncLog).order_by(SyncLog.created_at.desc()).first();r["last_activity"]=last.created_at.isoformat() if last and last.created_at else None
  except Exception as e:r["stats_error"]=f"{type(e).__name__}: {e}"[:300]
  finally:db.close()
  return r
