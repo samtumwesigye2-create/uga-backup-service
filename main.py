@@ -9,8 +9,8 @@ from database import Base,engine,get_db,SessionLocal
 from models import BackupRecord,Snapshot,SyncLog
 from schemas import BulkSyncPayload,RestoreRequest,SyncEvent
 from snapshot_scheduler import start_snapshot_scheduler
-app=FastAPI(title="UGA Backup Service",version="1.5")
-SYNC_TOKEN=os.environ.get("BACKUP_SYNC_TOKEN","").strip();RESTORE_TOKEN=os.environ.get("BACKUP_RESTORE_TOKEN","").strip();RESTORE_TARGET_URLS={"UGAMAP":os.environ.get("UGAMAP_RESTORE_URL"),"UGASHIP":os.environ.get("UGASHIP_RESTORE_URL")};DB_READY=False;DB_ERROR=None
+app=FastAPI(title="UGA Backup Service",version="1.6")
+SYNC_TOKEN=os.environ.get("BACKUP_SYNC_TOKEN","").strip();RESTORE_TOKEN=os.environ.get("BACKUP_RESTORE_TOKEN","").strip();RESTORE_TARGET_URLS={"UGAMAP":os.environ.get("UGAMAP_RESTORE_URL"),"UGASHIP":os.environ.get("UGASHIP_RESTORE_URL"),"WAREHOUSE":os.environ.get("WAREHOUSE_RESTORE_URL")};DB_READY=False;DB_ERROR=None
 def _now_iso():return datetime.now(timezone.utc).isoformat()
 def _checksum(data):return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
 def _initialize_database():
@@ -46,12 +46,12 @@ def health():
   if DB_ERROR:r["database_error"]=DB_ERROR[:500]
   return r
  db=SessionLocal()
- try:r["records"]={"UGAMAP":db.query(BackupRecord).filter(BackupRecord.source=="UGAMAP",BackupRecord.is_deleted==0).count(),"UGASHIP":db.query(BackupRecord).filter(BackupRecord.source=="UGASHIP",BackupRecord.is_deleted==0).count(),"deleted":db.query(BackupRecord).filter(BackupRecord.is_deleted!=0).count(),"snapshots":db.query(Snapshot).count()};last=db.query(SyncLog).order_by(SyncLog.created_at.desc()).first();r["last_activity"]=last.created_at.isoformat() if last and last.created_at else None
+ try:r["records"]={"UGAMAP":db.query(BackupRecord).filter(BackupRecord.source=="UGAMAP",BackupRecord.is_deleted==0).count(),"UGASHIP":db.query(BackupRecord).filter(BackupRecord.source=="UGASHIP",BackupRecord.is_deleted==0).count(),"WAREHOUSE":db.query(BackupRecord).filter(BackupRecord.source=="WAREHOUSE",BackupRecord.is_deleted==0).count(),"deleted":db.query(BackupRecord).filter(BackupRecord.is_deleted!=0).count(),"snapshots":db.query(Snapshot).count()};last=db.query(SyncLog).order_by(SyncLog.created_at.desc()).first();r["last_activity"]=last.created_at.isoformat() if last and last.created_at else None
  except Exception as e:r["stats_error"]=f"{type(e).__name__}: {e}"[:300]
  finally:db.close()
  return r
 @app.get("/audit",dependencies=[Depends(verify_restore_token)])
-def audit(source:str|None=Query(None,pattern="^(UGAMAP|UGASHIP)$"),limit:int=Query(100,ge=1,le=500),db:Session=Depends(get_db)):
+def audit(source:str|None=Query(None,pattern="^(UGAMAP|UGASHIP|WAREHOUSE)$"),limit:int=Query(100,ge=1,le=500),db:Session=Depends(get_db)):
  q=db.query(SyncLog)
  if source:q=q.filter(SyncLog.source==source)
  rows=q.order_by(SyncLog.created_at.desc(),SyncLog.id.desc()).limit(limit).all();return {"source":source,"count":len(rows),"events":[{"id":x.id,"action":x.action,"source":x.source,"detail":x.detail,"created_at":x.created_at} for x in rows]}
@@ -80,18 +80,18 @@ def sync_bulk(p:BulkSyncPayload,db:Session=Depends(get_db)):
   synced+=1
  db.add(SyncLog(action="bulk_sync",source=p.source,detail=f"{p.entity_type}: {synced} records, {skipped} skipped"));db.commit();return {"status":"ok","synced":synced,"skipped":skipped}
 @app.get("/records",dependencies=[Depends(verify_restore_token)])
-def records(source:str=Query(...,pattern="^(UGAMAP|UGASHIP)$"),entity_type:str|None=None,include_deleted:bool=False,db:Session=Depends(get_db)):
+def records(source:str=Query(...,pattern="^(UGAMAP|UGASHIP|WAREHOUSE)$"),entity_type:str|None=None,include_deleted:bool=False,db:Session=Depends(get_db)):
  q=db.query(BackupRecord).filter(BackupRecord.source==source)
  if not include_deleted:q=q.filter(BackupRecord.is_deleted==0)
  if entity_type:q=q.filter(BackupRecord.entity_type==entity_type)
  return [{"entity_type":r.entity_type,"entity_id":r.entity_id,"data":r.data,"is_deleted":bool(r.is_deleted),"source_updated_at":r.source_updated_at,"synced_at":r.synced_at} for r in q.all()]
 @app.post("/snapshot/create",dependencies=[Depends(verify_restore_token)])
-def create_snapshot(source:str|None=Query(None,pattern="^(UGAMAP|UGASHIP)$"),db:Session=Depends(get_db)):
+def create_snapshot(source:str|None=Query(None,pattern="^(UGAMAP|UGASHIP|WAREHOUSE)$"),db:Session=Depends(get_db)):
  q=db.query(BackupRecord)
  if source:q=q.filter(BackupRecord.source==source)
  rows=q.order_by(BackupRecord.source,BackupRecord.entity_type,BackupRecord.entity_id).all();dump=[{"source":r.source,"entity_type":r.entity_type,"entity_id":r.entity_id,"data":r.data,"is_deleted":bool(r.is_deleted),"source_updated_at":r.source_updated_at.isoformat() if r.source_updated_at else None} for r in rows];checksum=_checksum(dump);label=datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S");s=Snapshot(label=label,source=source,checksum=checksum,data=dump);db.add(s);db.add(SyncLog(action="snapshot",source=source,detail=f"{label}: {len(dump)} records sha256={checksum}"));db.commit();db.refresh(s);return {"status":"ok","id":s.id,"label":label,"record_count":len(dump),"checksum":checksum}
 @app.get("/snapshot/list",dependencies=[Depends(verify_restore_token)])
-def list_snapshots(source:str|None=Query(None,pattern="^(UGAMAP|UGASHIP)$"),db:Session=Depends(get_db)):
+def list_snapshots(source:str|None=Query(None,pattern="^(UGAMAP|UGASHIP|WAREHOUSE)$"),db:Session=Depends(get_db)):
  q=db.query(Snapshot)
  if source:q=q.filter(Snapshot.source==source)
  return [{"id":s.id,"label":s.label,"source":s.source,"checksum":s.checksum,"created_at":s.created_at} for s in q.order_by(Snapshot.created_at.desc()).limit(100).all()]

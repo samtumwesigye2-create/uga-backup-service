@@ -36,7 +36,7 @@ def _create_snapshot_for(source):
 def _worker():
  time.sleep(60)
  while True:
-  ok1=_create_snapshot_for("UGAMAP");ok2=_create_snapshot_for("UGASHIP");time.sleep(SNAPSHOT_INTERVAL_SECONDS if ok1 and ok2 else SNAPSHOT_RETRY_SECONDS)
+  results=[_create_snapshot_for(source) for source in ("UGAMAP","UGASHIP","WAREHOUSE")];time.sleep(SNAPSHOT_INTERVAL_SECONDS if all(results) else SNAPSHOT_RETRY_SECONDS)
 def start_snapshot_scheduler():
  global _started
  with _lock:
