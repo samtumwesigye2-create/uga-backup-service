@@ -12,18 +12,21 @@ def _prune(db,source):
  old=db.query(Snapshot).filter(Snapshot.source==source).order_by(Snapshot.created_at.desc()).offset(SNAPSHOT_RETENTION).all()
  for s in old:db.delete(s)
  if old:db.add(SyncLog(action="snapshot_prune",source=source,detail=f"Removed {len(old)} old snapshots; retention={SNAPSHOT_RETENTION}"))
-def _verify_latest(db,source):
- snap=db.query(Snapshot).filter(Snapshot.source==source).order_by(Snapshot.created_at.desc()).first()
- if not snap:return True
+def _verify_snapshot(db,snap):
  actual=_checksum(snap.data)
- if actual!=snap.checksum:db.add(SyncLog(action="snapshot_integrity_failed",source=source,detail=f"snapshot={snap.id} expected={snap.checksum} actual={actual}"));return False
- db.add(SyncLog(action="snapshot_integrity_ok",source=source,detail=f"snapshot={snap.id} checksum={actual}"));return True
+ if actual!=snap.checksum:
+  db.add(SyncLog(action="snapshot_integrity_failed",source=snap.source,detail=f"snapshot={snap.id} expected={snap.checksum} actual={actual}"));return False
+ db.add(SyncLog(action="snapshot_integrity_ok",source=snap.source,detail=f"snapshot={snap.id} checksum={actual}"));return True
 def _create_snapshot_for(source):
  db=SessionLocal()
  try:
   records=db.query(BackupRecord).filter(BackupRecord.source==source).order_by(BackupRecord.source,BackupRecord.entity_type,BackupRecord.entity_id).all();dump=[{"source":r.source,"entity_type":r.entity_type,"entity_id":r.entity_id,"data":r.data,"is_deleted":bool(r.is_deleted),"source_updated_at":r.source_updated_at.isoformat() if r.source_updated_at else None} for r in records];checksum=_checksum(dump);latest=db.query(Snapshot).filter(Snapshot.source==source).order_by(Snapshot.created_at.desc()).first()
-  if latest and latest.checksum==checksum:_verify_latest(db,source);_prune(db,source);db.add(SyncLog(action="snapshot_skipped",source=source,detail="No data changes since previous snapshot"));db.commit();return True
-  label=datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S");snap=Snapshot(label=label,source=source,checksum=checksum,data=dump);db.add(snap);db.flush();_verify_latest(db,source);_prune(db,source);db.add(SyncLog(action="snapshot_auto",source=source,detail=f"{label}: {len(dump)} records sha256={checksum}"));db.commit();return True
+  if latest and latest.checksum==checksum:
+   if not _verify_snapshot(db,latest):db.commit();return False
+   _prune(db,source);db.add(SyncLog(action="snapshot_skipped",source=source,detail="No data changes since previous snapshot"));db.commit();return True
+  label=datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S");snap=Snapshot(label=label,source=source,checksum=checksum,data=dump);db.add(snap);db.flush()
+  if not _verify_snapshot(db,snap):db.commit();return False
+  _prune(db,source);db.add(SyncLog(action="snapshot_auto",source=source,detail=f"{label}: {len(dump)} records sha256={checksum}"));db.commit();return True
  except Exception as exc:
   db.rollback()
   try:db.add(SyncLog(action="snapshot_failed",source=source,detail=f"{type(exc).__name__}: {exc}"[:1000]));db.commit()
