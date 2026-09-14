@@ -8,9 +8,12 @@ def test_president_is_supported_across_backup_payloads():
         entity_id="1",
         data={"id": 1},
     ).source == "UNG-PRESIDENT"
-    assert BulkSyncPayload(
+    bulk = BulkSyncPayload(
         source="UNG-PRESIDENT",
         entity_type="users",
         records=[{"id": 1}],
-    ).source == "UNG-PRESIDENT"
+        replace=True,
+    )
+    assert bulk.source == "UNG-PRESIDENT"
+    assert bulk.replace is True
     assert RestoreRequest(source="UNG-PRESIDENT", dry_run=True).source == "UNG-PRESIDENT"
