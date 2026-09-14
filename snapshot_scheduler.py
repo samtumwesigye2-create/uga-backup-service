@@ -7,6 +7,7 @@ from data_relay_client import emit as relay_emit,start_relay_heartbeat
 SNAPSHOT_INTERVAL_SECONDS=max(3600,int(os.environ.get("SNAPSHOT_INTERVAL_SECONDS","86400")))
 SNAPSHOT_RETENTION=max(7,int(os.environ.get("SNAPSHOT_RETENTION","30")))
 SNAPSHOT_RETRY_SECONDS=300
+SUPPORTED_SOURCES=("UGAMAP","UGASHIP","WAREHOUSE","UNG-PRESIDENT")
 _started=False;_lock=threading.Lock()
 def _checksum(data):return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
 def _prune(db,source):
@@ -38,7 +39,7 @@ def _create_snapshot_for(source):
 def _worker():
  time.sleep(60)
  while True:
-  results=[_create_snapshot_for(source) for source in ("UGAMAP","UGASHIP","WAREHOUSE")];time.sleep(SNAPSHOT_INTERVAL_SECONDS if all(results) else SNAPSHOT_RETRY_SECONDS)
+  results=[_create_snapshot_for(source) for source in SUPPORTED_SOURCES];time.sleep(SNAPSHOT_INTERVAL_SECONDS if all(results) else SNAPSHOT_RETRY_SECONDS)
 def start_snapshot_scheduler():
  global _started
  with _lock:
