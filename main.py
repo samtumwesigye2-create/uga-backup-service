@@ -69,17 +69,22 @@ def sync_event(e:SyncEvent,db:Session=Depends(get_db)):
  db.add(SyncLog(action="sync",source=e.source,detail=f"{e.entity_type}:{e.entity_id}"));db.commit();return {"status":"synced","entity_id":e.entity_id}
 @app.post("/sync/bulk",dependencies=[Depends(verify_sync_token)])
 def sync_bulk(p:BulkSyncPayload,db:Session=Depends(get_db)):
- synced=0;skipped=0
+ synced=0;skipped=0;removed=0;incoming_ids=set()
  for record in p.records:
   raw=record.get("id",record.get("entity_id"))
   if raw is None:skipped+=1;continue
   eid=str(raw).strip()
   if not eid:skipped+=1;continue
+  incoming_ids.add(eid)
   x=db.query(BackupRecord).filter(and_(BackupRecord.source==p.source,BackupRecord.entity_type==p.entity_type,BackupRecord.entity_id==eid)).first()
   if x:x.data=record;x.is_deleted=0
   else:db.add(BackupRecord(source=p.source,entity_type=p.entity_type,entity_id=eid,data=record))
   synced+=1
- db.add(SyncLog(action="bulk_sync",source=p.source,detail=f"{p.entity_type}: {synced} records, {skipped} skipped"));db.commit();return {"status":"ok","synced":synced,"skipped":skipped}
+ if p.replace:
+  existing=db.query(BackupRecord).filter(BackupRecord.source==p.source,BackupRecord.entity_type==p.entity_type,BackupRecord.is_deleted==0).all()
+  for x in existing:
+   if x.entity_id not in incoming_ids:x.is_deleted=1;removed+=1
+ db.add(SyncLog(action="bulk_sync",source=p.source,detail=f"{p.entity_type}: {synced} records, {skipped} skipped, {removed} removed, replace={p.replace}"));db.commit();return {"status":"ok","synced":synced,"skipped":skipped,"removed":removed,"replace":p.replace}
 @app.get("/records",dependencies=[Depends(verify_restore_token)])
 def records(source:str=Query(...,pattern=SOURCE_PATTERN),entity_type:str|None=None,include_deleted:bool=False,db:Session=Depends(get_db)):
  q=db.query(BackupRecord).filter(BackupRecord.source==source)
