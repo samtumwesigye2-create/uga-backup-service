@@ -19,6 +19,7 @@ class BulkSyncPayload(BaseModel):
     source: BackupSource
     entity_type: str = Field(min_length=1, max_length=128)
     records: list[dict[str, Any]]
+    replace: bool = False
 
 
 class RestoreRequest(BaseModel):
