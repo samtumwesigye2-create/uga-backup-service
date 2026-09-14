@@ -13,7 +13,13 @@ def _normalize(url: str) -> str:
 
 
 def _pick_database_url() -> str:
-    # Prefer an explicitly configured public/reachable URL when present.
+    # Highest priority: an explicitly configured same-project private URL.
+    # This allows Railway private networking without replacing the legacy
+    # public backup URL, which can be retained for later recovery/forensics.
+    private_override = _normalize(os.environ.get("BACKUP_DATABASE_PRIVATE_URL", ""))
+    if private_override:
+        return private_override
+
     candidates = [
         os.environ.get("BACKUP_DATABASE_PUBLIC_URL", ""),
         os.environ.get("DATABASE_PUBLIC_URL", ""),
@@ -25,21 +31,14 @@ def _pick_database_url() -> str:
         url = _normalize(raw)
         if not url:
             continue
-
-        # Skip Railway private hostnames when a public URL is available later
-        # in the candidate chain. This prevents DNS failures across projects.
         try:
             host = (urlparse(url).hostname or "").lower()
         except Exception:
             host = ""
-
         if host.endswith(".railway.internal"):
             continue
-
         return url
 
-    # If no public URL exists, fall back to the configured backup URL so
-    # same-project Railway private networking can still work.
     fallback = _normalize(os.environ.get("BACKUP_DATABASE_URL", ""))
     if fallback:
         return fallback
@@ -49,8 +48,9 @@ def _pick_database_url() -> str:
         return fallback
 
     raise RuntimeError(
-        "No database URL configured. Set BACKUP_DATABASE_PUBLIC_URL, "
-        "DATABASE_PUBLIC_URL, BACKUP_DATABASE_URL, or DATABASE_URL."
+        "No database URL configured. Set BACKUP_DATABASE_PRIVATE_URL, "
+        "BACKUP_DATABASE_PUBLIC_URL, DATABASE_PUBLIC_URL, "
+        "BACKUP_DATABASE_URL, or DATABASE_URL."
     )
 
 
