@@ -3,9 +3,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+BackupSource = Literal["UGAMAP", "UGASHIP", "WAREHOUSE", "UNG-PRESIDENT"]
+
 
 class SyncEvent(BaseModel):
-    source: Literal["UGAMAP", "UGASHIP", "WAREHOUSE"]
+    source: BackupSource
     entity_type: str = Field(min_length=1, max_length=128)
     entity_id: str = Field(min_length=1, max_length=255)
     action: Literal["create", "update", "delete"] = "update"
@@ -14,13 +16,14 @@ class SyncEvent(BaseModel):
 
 
 class BulkSyncPayload(BaseModel):
-    source: Literal["UGAMAP", "UGASHIP", "WAREHOUSE"]
+    source: BackupSource
     entity_type: str = Field(min_length=1, max_length=128)
     records: list[dict[str, Any]]
+    replace: bool = False
 
 
 class RestoreRequest(BaseModel):
-    source: Literal["UGAMAP", "UGASHIP", "WAREHOUSE"]
+    source: BackupSource
     entity_type: str | None = Field(default=None, max_length=128)
     target_url: str | None = None
     snapshot_id: int | None = Field(default=None, ge=1)
