@@ -2,6 +2,24 @@
 
 Standalone FastAPI + PostgreSQL backup service for UGAMAP and UGASHIP.
 
+## UNG-PRESIDENT full snapshots
+
+`POST /president/snapshot` accepts a complete, checksummed twelve-table database
+snapshot with the existing sync credential. Incomplete manifests and checksum
+mismatches are rejected before storage. Snapshots are immutable and include empty
+tables, account password hashes, salts, and audit records for lossless migration.
+These records require the same restricted treatment as the production database.
+
+`GET /president/snapshots` lists metadata with the restore credential. The existing
+`GET /snapshot/{id}` retrieves the stored payload for full checksum/readback
+verification. Existing UGAMAP/UGASHIP/WAREHOUSE record mirrors are unchanged.
+UNG-PRESIDENT full snapshots are not created by the existing mirror scheduler;
+they must be submitted by `president_data.py` from its repository. No automatic
+pruning is enabled for these cutover snapshots.
+
+Adding these endpoints does not capture the live PRESIDENT database. Run and verify
+an export from the original host before any redeployment of that application.
+
 It is designed to run independently from both production applications and their primary databases so data can still be recovered after a main-host or database failure.
 
 ## Data flow

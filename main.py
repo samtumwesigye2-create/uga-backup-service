@@ -127,3 +127,6 @@ async def restore(req:RestoreRequest,db:Session=Depends(get_db)):
   try:r=await client.post(target,json={"source":req.source,"entity_type":req.entity_type,"records":out},headers={"x-backup-restore-token":token});r.raise_for_status()
   except httpx.HTTPError as e:db.add(SyncLog(action="restore_failed",source=req.source,detail=str(e)[:1000]));db.commit();raise HTTPException(502,"Restore push failed") from e
  db.add(SyncLog(action="restore_complete",source=req.source,detail=f"{len(out)} records -> {target}"));db.commit();return {"status":"restored","record_count":len(out),"target":target}
+
+from president_backups import register as register_president_backups
+register_president_backups(app, get_db, verify_sync_token, verify_restore_token)
