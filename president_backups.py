@@ -38,7 +38,7 @@ def register(app, get_db, verify_sync_token, verify_restore_token):
                                          separators=(',', ':')).encode()).hexdigest()
         if seen != TABLES or not hmac.compare_digest(digest, payload.checksum):
             raise HTTPException(422, 'Snapshot checksum or table manifest mismatch.')
-        snapshot = Snapshot(source='UNG-PRESIDENT', checksum=digest, data=payload.records,
+        snapshot = Snapshot(source='UNG-PRESIDENT-FULL', checksum=digest, data=payload.records,
                             label=datetime.now(timezone.utc).strftime('president-%Y%m%d-%H%M%S'))
         db.add(snapshot)
         db.add(SyncLog(action='snapshot', source='UNG-PRESIDENT', detail='Complete database snapshot'))
@@ -49,5 +49,5 @@ def register(app, get_db, verify_sync_token, verify_restore_token):
 
     @app.get('/president/snapshots', dependencies=[Depends(verify_restore_token)])
     def list_snapshots(db: Session = Depends(get_db)):
-        rows = db.query(Snapshot).filter(Snapshot.source == 'UNG-PRESIDENT').order_by(Snapshot.id.desc()).limit(100).all()
+        rows = db.query(Snapshot).filter(Snapshot.source == 'UNG-PRESIDENT-FULL').order_by(Snapshot.id.desc()).limit(100).all()
         return [{'id': row.id, 'checksum': row.checksum, 'created_at': row.created_at} for row in rows]
